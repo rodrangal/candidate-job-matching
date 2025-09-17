@@ -4,23 +4,25 @@ FROM python:3.11-slim
 # Set working directory
 WORKDIR /app
 
-# Install system deps (needed for some Python packages)
+# Install system dependencies required for Python packages
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements and install
+# Copy requirements first (for caching)
 COPY requirements.txt .
+
+# Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy app source code
+# Copy the app source code
 COPY . .
 
-# Streamlit needs this for headless mode on Render
+# Ensure Streamlit runs in headless mode
 ENV STREAMLIT_SERVER_HEADLESS=true
 
-# Expose the port Streamlit will run on
+# Expose Streamlit port
 EXPOSE 8501
 
-# Default command to run the app
+# Start Streamlit app
 CMD ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]

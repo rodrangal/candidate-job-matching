@@ -1,97 +1,79 @@
 import streamlit as st
-import faiss
-import pickle
-from sentence_transformers import SentenceTransformer
-from io import StringIO
-import os
-import PyPDF2
-import docx
+import pandas as pd
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+import nltk
+from nltk.corpus import stopwords
+import re
 
-# --------------------------
-# Helpers
-# --------------------------
-def read_txt(file):
-    return file.read().decode("utf-8")
+# Download NLTK stopwords at runtime (only first time)
+nltk.download("stopwords", quiet=True)
+STOPWORDS = set(stopwords.words("english"))
 
-def read_pdf(file):
-    reader = PyPDF2.PdfReader(file)
-    text = ""
-    for page in reader.pages:
-        text += page.extract_text() or ""
-    return text
+# Text preprocessing
+def preprocess(text):
+    if not isinstance(text, str):
+        return ""
+    text = text.lower()
+    text = re.sub(r"[^a-z\s]", "", text)  # keep only letters
+    tokens = [word for word in text.split() if word not in STOPWORDS]
+    return " ".join(tokens)
 
-def read_docx(file):
-    doc = docx.Document(file)
-    return "\n".join([p.text for p in doc.paragraphs])
+# Load sample data
+@st.cache_data
+def load_data():
+    jobs = pd.DataFrame({
+        "job_id": [1, 2],
+        "title": ["Data Scientist", "HR Manager"],
+        "description": [
+            "Looking for data scientist with Python and ML experience",
+            "HR manager with recruitment and communication skills"
+        ]
+    })
+    candidates = pd.DataFrame({
+        "candidate_id": [101, 102],
+        "name": ["Alice", "Bob"],
+        "resume": [
+            "Experienced in Python, machine learning, and statistics",
+            "Skilled in human resources, recruitment, and people management"
+        ]
+    })
+    return jobs, candidates
 
-def parse_uploaded_file(file):
-    if file.name.endswith(".txt"):
-        return read_txt(file)
-    elif file.name.endswith(".pdf"):
-        return read_pdf(file)
-    elif file.name.endswith(".docx"):
-        return read_docx(file)
-    else:
-        return None
+# Candidate-job matching
+def match_candidates(jobs, candidates):
+    jobs["cleaned"] = jobs["description"].apply(preprocess)
+    candidates["cleaned"] = candidates["resume"].apply(preprocess)
 
-# --------------------------
-# Load model
-# --------------------------
-@st.cache_resource
-def load_model():
-    return SentenceTransformer("all-MiniLM-L6-v2")
+    combined = pd.concat([jobs["cleaned"], candidates["cleaned"]])
+    vectorizer = TfidfVectorizer()
+    tfidf = vectorizer.fit_transform(combined)
 
-model = load_model()
+    job_tfidf = tfidf[: len(jobs)]
+    cand_tfidf = tfidf[len(jobs) :]
 
-# --------------------------
+    similarity = cosine_similarity(cand_tfidf, job_tfidf)
+
+    results = []
+    for i, cand in candidates.iterrows():
+        best_idx = similarity[i].argmax()
+        best_score = similarity[i][best_idx]
+        results.append({
+            "candidate": cand["name"],
+            "best_job": jobs.iloc[best_idx]["title"],
+            "similarity": round(best_score, 2)
+        })
+    return pd.DataFrame(results)
+
 # Streamlit UI
-# --------------------------
-st.set_page_config(page_title="Candidate-Job Matching Demo", layout="wide")
-st.title("🤝 Candidate ↔ Job Matching System (MVP Demo)")
+def main():
+    st.title("Candidate–Job Matching Demo (Lightweight)")
+    jobs, candidates = load_data()
 
-# Upload job description
-st.subheader("1. Upload Job Description")
-jd_file = st.file_uploader("Upload a job description (.txt, .pdf, .docx)", type=["txt", "pdf", "docx"])
+    if st.button("Run Matching"):
+        results = match_candidates(jobs, candidates)
+        st.subheader("Best Matches")
+        st.dataframe(results)
 
-# Upload candidate resumes
-st.subheader("2. Upload Candidate Resumes")
-resume_files = st.file_uploader("Upload multiple resumes", type=["txt", "pdf", "docx"], accept_multiple_files=True)
-
-if jd_file and resume_files:
-    jd_text = parse_uploaded_file(jd_file)
-
-    # Parse resumes
-    resumes = {}
-    for f in resume_files:
-        text = parse_uploaded_file(f)
-        if text:
-            resumes[f.name] = text
-
-    if st.button("🔍 Find Top Matches"):
-        # Encode job + resumes
-        jd_embedding = model.encode([jd_text], normalize_embeddings=True)
-        resume_embeddings = model.encode(list(resumes.values()), normalize_embeddings=True)
-
-        # Build FAISS index
-        dim = resume_embeddings.shape[1]
-        index = faiss.IndexFlatIP(dim)
-        index.add(resume_embeddings)
-
-        # Search
-        k = min(5, len(resumes))
-        D, I = index.search(jd_embedding, k)
-
-        st.subheader("📊 Top Candidate Matches")
-        for rank, idx in enumerate(I[0]):
-            name = list(resumes.keys())[idx]
-            score = float(D[0][rank])
-            st.markdown(f"**{rank+1}. {name}** — score: `{score:.4f}`")
-            
-            # Highlight overlapping keywords
-            jd_words = set(jd_text.lower().split())
-            resume_words = set(resumes[name].lower().split())
-            overlap = jd_words.intersection(resume_words)
-            if overlap:
-                st.write("🔑 Matched keywords:", ", ".join(list(overlap)[:10]))
-
-        st.success("Done! You can try uploading different JDs or resumes.")
+if __name__ == "__main__":
+    main()
