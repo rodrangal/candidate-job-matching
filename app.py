@@ -5,7 +5,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 import nltk
 from nltk.corpus import stopwords
 import re
-import pdfplumber
+from PyPDF2 import PdfReader
 
 # Download NLTK stopwords (only first time)
 nltk.download("stopwords", quiet=True)
@@ -23,9 +23,11 @@ def preprocess(text):
 # ----------- PDF Reader -----------
 def read_pdf(file):
     text = ""
-    with pdfplumber.open(file) as pdf:
-        for page in pdf.pages:
-            text += page.extract_text() or ""
+    reader = PdfReader(file)
+    for page in reader.pages:
+        content = page.extract_text()
+        if content:
+            text += content
     return text.strip()
 
 # ----------- Data Loaders -----------
@@ -72,11 +74,18 @@ def match_candidates(jobs, candidates):
     candidates["cleaned"] = candidates["resume"].apply(preprocess)
 
     combined = pd.concat([jobs["cleaned"], candidates["cleaned"]])
-    vectorizer = TfidfVectorizer()
+
+    # ✅ TF-IDF with bigrams and feature limit
+    vectorizer = TfidfVectorizer(
+        ngram_range=(1, 2),
+        max_features=5000,
+        min_df=2,
+        stop_words="english"
+    )
     tfidf = vectorizer.fit_transform(combined)
 
     job_tfidf = tfidf[: len(jobs)]
-    cand_tfidf = tfidf[len(jobs) :]
+    cand_tfidf = tfidf[len(jobs):]
 
     similarity = cosine_similarity(cand_tfidf, job_tfidf)
 
